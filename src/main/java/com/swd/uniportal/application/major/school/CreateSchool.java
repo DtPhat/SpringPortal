@@ -1,0 +1,167 @@
+package com.swd.uniportal.application.major.school;
+
+import com.swd.uniportal.application.common.BaseController;
+import com.swd.uniportal.application.common.CustomValidation;
+import com.swd.uniportal.application.common.FailedResponse;
+import com.swd.uniportal.application.common.exception.AccountNotFoundException;
+import com.swd.uniportal.application.major.exception.DuplicatedCodeException;
+import com.swd.uniportal.domain.account.Account;
+import com.swd.uniportal.domain.major.School;
+import com.swd.uniportal.infrastructure.common.annotation.Datasource;
+import com.swd.uniportal.infrastructure.repository.AccountRepository;
+import com.swd.uniportal.infrastructure.repository.SchoolRepository;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.NotBlank;
+import java.net.URI;
+import java.util.List;
+import java.util.Optional;
+import lombok.AccessLevel;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
+public class CreateSchool {
+
+    @Data
+    public static class CreateSchoolRequest {
+
+        @NotBlank(message = "name: must not be null or blank.")
+        private String name;
+
+        @NotBlank(message = "code: must not be null or blank.")
+        private String code;
+
+        private String description;
+
+    }
+
+    @Builder
+    public record SchoolCreatedResponse(Long id, String name, String code, String description) {
+    }
+
+    @RestController
+    @AllArgsConstructor
+    @Tag(name = "majors")
+    public static class CreateSchoolController extends BaseController {
+
+        private final CreateSchoolService service;
+
+        @PostMapping("/majors/departments/schools")
+        @Operation(summary = "Create a school.")
+        @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                description = "School info to create.",
+                content = @Content(
+                        mediaType = "application/json",
+                        schema = @Schema(implementation = CreateSchoolRequest.class)
+                )
+        )
+        @ApiResponse(
+                responseCode = "201",
+                description = "Successfully created.",
+                content = @Content(
+                        mediaType = "application/json",
+                        schema = @Schema(implementation = SchoolCreatedResponse.class)
+                )
+        )
+        @ApiResponse(
+                responseCode = "400",
+                description = "Invalid request body.",
+                content = @Content(
+                        mediaType = "application/json",
+                        schema = @Schema(implementation = FailedResponse.class)
+                )
+        )
+        @ApiResponse(
+                responseCode = "403",
+                description = "No permission to create with current role.",
+                content = @Content(
+                        mediaType = "application/json",
+                        schema = @Schema(implementation = FailedResponse.class)
+                )
+        )
+        @ApiResponse(
+                responseCode = "500",
+                description = "Server error.",
+                content = @Content(
+                        mediaType = "application/json",
+                        schema = @Schema(implementation = FailedResponse.class)
+                )
+        )
+        public ResponseEntity<Object> create(@RequestBody CreateSchoolRequest request) {
+            List<String> violations = CustomValidation.validate(request);
+            if (!violations.isEmpty()) {
+                return ResponseEntity.badRequest().body(new FailedResponse(violations));
+            }
+            try {
+                SchoolCreatedResponse response = service.create(request);
+                return ResponseEntity.created(new URI("")).body(response);
+            } catch (DuplicatedCodeException | AccountNotFoundException e) {
+                return ResponseEntity.badRequest().body(new FailedResponse(List.of(e.getMessage())));
+            } catch (Exception e) {
+                return ResponseEntity.internalServerError().body(new FailedResponse(List.of("Server error")));
+            }
+        }
+
+    }
+
+    @Service
+    @AllArgsConstructor
+    @Transactional
+    public static class CreateSchoolService {
+
+        private final CreateSchoolDatasource datasource;
+
+        public SchoolCreatedResponse create(CreateSchoolRequest request) throws DuplicatedCodeException, AccountNotFoundException {
+            School school = School.builder()
+                    .name(StringUtils.trim(request.getName()))
+                    .code(StringUtils.trim(request.getCode()))
+                    .description(StringUtils.trimToNull(request.getDescription()))
+                    .build();
+            if (datasource.codeAlreadyExists(school.getCode())) {
+                throw new DuplicatedCodeException(String.format("Code %s already exists.", school.getCode()));
+            }
+            school = datasource.persist(school);
+            return SchoolCreatedResponse.builder()
+                    .id(school.getId())
+                    .code(school.getCode())
+                    .name(school.getName())
+                    .description(school.getDescription())
+                    .build();
+        }
+
+    }
+
+    @Datasource
+    @AllArgsConstructor
+    public static class CreateSchoolDatasource {
+
+        private final SchoolRepository schoolRepository;
+        private final AccountRepository accountRepository;
+
+        public Optional<Account> getAccountById(Long id) {
+            return accountRepository.findById(id);
+        }
+
+        public boolean codeAlreadyExists(String code) {
+            return schoolRepository.existsSchoolByCode(code);
+        }
+
+        public School persist(School school) {
+            return schoolRepository.save(school);
+        }
+    }
+
+}
